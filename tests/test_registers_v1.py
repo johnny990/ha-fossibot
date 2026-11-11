@@ -173,3 +173,83 @@ def test_v1_holding_write_frame():
 def test_v1_write_refusals(func, register, value):
     with pytest.raises(ModbusValidationError):
         get_write_modbus_v1(0x11, func, register, value)
+
+
+# --- custom charge schedule ---------------------------------------------------
+
+from fossibot_ha.sydpower.registers_v1 import (
+    FUNC_WRITE_STATE as _F5, IREG_V1_CHARGE_SCHEDULE_FLAGS, decode_charge_window,
+)
+
+
+def test_schedule_enable_write_matches_app_capture():
+    # app "send to device" with window 1 enabled: 11 05 53 0001 0001 580e
+    frame = get_write_modbus_v1(0x11, _F5, IREG_V1_CHARGE_SCHEDULE_FLAGS, 1)
+    assert bytes(frame).hex() == "11055300010001580e"
+    with pytest.raises(ModbusValidationError):
+        get_write_modbus_v1(0x11, _F5, IREG_V1_CHARGE_SCHEDULE_FLAGS, 8)
+
+
+def test_charge_window_packing():
+    # 01:30-02:40, 1.5 kWh, to 80 %, every Monday
+    time_word = (2 << 11) | (4 << 8) | (1 << 3) | 3
+    assert decode_charge_window(time_word, (15 << 8), 1 << 1) == "01:30-02:40 1.5 kWh Mon"
+    assert decode_charge_window(time_word, 80, 1 << 1) == "01:30-02:40 to 80 % Mon"
+    assert decode_charge_window(0, 0, 0) == "not set"
+    assert decode_charge_window(0xFFFF, 0, 0) == "not set"
+    assert decode_charge_window(None, 0, 0) is None
+
+
+def test_captured_holding_frame_schedule_and_flags():
+    out = decode_holding_registers_v1(HOLDING)
+    assert out["chargeSchedule1"] == "23:00-07:00 to 90 % Daily"   # holding 38-40 = 0x38B8, 90, 0x7F
+    assert out["chargeSchedule2"] == "not set"
+    inp = decode_input_registers_v1(INPUT_IDLE)
+    assert inp["chargeSchedule1Enabled"] is True and inp["chargeSchedule2Enabled"] is False  # input 83 = 1
+    assert inp["acCustomCharge"] is True            # state word bit 12
+
+
+def test_charge_window_write_matches_app_capture():
+    from fossibot_ha.sydpower.registers_v1 import encode_charge_window
+    # app edit: 01:30-02:40, 1.5 kWh, every Monday -> 11 06 26 0003 140b 0f00 0002 a613
+    words = encode_charge_window(1, 30, 2, 40, 1.5, 0, 1 << 1)
+    assert words == [0x140B, 0x0F00, 0x0002]
+    assert bytes(get_write_modbus_v1(0x11, FUNC_WRITE_HOLDING, 38, words)).hex() == "1106260003140b0f000002a613"
+    # app restore: 23:00-07:00, to 90 %, daily -> 11 06 26 0003 38b8 005a 007f f6f2
+    words = encode_charge_window(23, 0, 7, 0, 0, 90, 0x7F)
+    assert bytes(get_write_modbus_v1(0x11, FUNC_WRITE_HOLDING, 38, words)).hex() == "110626000338b8005a007ff6f2"
+
+
+@pytest.mark.parametrize("args", [
+    (1, 35, 2, 40, 0, 50, 0x7F),    # minutes not a multiple of 10
+    (1, 30, 1, 30, 0, 50, 0x7F),    # start == end
+    (1, 30, 2, 40, 1.5, 80, 0x7F),  # amount and target at once
+    (1, 30, 2, 40, 0, 101, 0x7F),   # SoC above 100
+    (1, 30, 2, 40, 0, 50, 0x80),    # 8th day bit
+])
+def test_charge_window_encode_refusals(args):
+    from fossibot_ha.sydpower.registers_v1 import encode_charge_window
+    with pytest.raises(ValueError):
+        encode_charge_window(*args)
+
+
+def test_multi_word_write_only_for_window_bases():
+    with pytest.raises(ModbusValidationError):
+        get_write_modbus_v1(0x11, FUNC_WRITE_HOLDING, 26, [100, 100, 100])
+    with pytest.raises(ModbusValidationError):
+        get_write_modbus_v1(0x11, FUNC_WRITE_HOLDING, 38, [0x140B, 0x0F00])     # two words
+    with pytest.raises(ModbusValidationError):
+        get_write_modbus_v1(0x11, FUNC_WRITE_HOLDING, 38, [0x140B, 0x0F65, 2])  # SoC 101
+
+
+def test_dc_usb_output_bit_matches_app_capture():
+    # app USB/DC off then on: 11 05 4b 0001 1810 56e4 / 11 05 4b 0001 1818 90e5
+    assert state_word_with_bit(0x1818, STATE_SWITCH_BITS["dcUsbOutput"], False) == 0x1810
+    assert bytes(get_write_modbus_v1(0x11, FUNC_WRITE_STATE, IREG_V1_SYSTEM_STATE, 0x1810)).hex() == "11054b0001181056e4"
+    assert decode_input_registers_v1(INPUT_IDLE)["dcUsbOutput"] is True   # 0x1898 has bit 3
+
+
+def test_ac_output_bit_matches_app_capture():
+    # app AC output off: 11 05 4b 0001 1808 5ce4 (bit 4 cleared from 0x1818)
+    assert state_word_with_bit(0x1818, STATE_SWITCH_BITS["acOutput"], False) == 0x1808
+    assert bytes(get_write_modbus_v1(0x11, FUNC_WRITE_STATE, IREG_V1_SYSTEM_STATE, 0x1808)).hex() == "11054b000118085ce4"

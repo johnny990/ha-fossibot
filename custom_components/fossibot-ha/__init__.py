@@ -10,6 +10,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 
 from .const import DOMAIN, DEFAULT_SCAN_INTERVAL
 from .coordinator import FossibotDataUpdateCoordinator
+from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator.start_health_check()
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
+    async_setup_services(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

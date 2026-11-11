@@ -41,6 +41,10 @@ class FossibotEntity(CoordinatorEntity):
     duplicate this code.
     """
 
+    # Entities carry only their own short name; Home Assistant prefixes the
+    # device name, so renaming the device renames every entity with it.
+    _attr_has_entity_name = True
+
     def __init__(self, coordinator, device_id: str) -> None:
         """Initialize the entity."""
         super().__init__(coordinator)

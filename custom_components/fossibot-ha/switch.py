@@ -12,7 +12,8 @@ from .const import DOMAIN
 from .coordinator import FossibotDataUpdateCoordinator
 from .entity import FossibotEntity, device_profile
 from .sydpower.registers_v1 import (
-    FUNC_WRITE_STATE, IREG_V1_SYSTEM_STATE, STATE_SWITCH_BITS, state_word_with_bit,
+    FUNC_WRITE_STATE, IREG_V1_CHARGE_SCHEDULE_FLAGS, IREG_V1_SYSTEM_STATE,
+    SCHEDULE_SWITCH_BITS, STATE_SWITCH_BITS, state_word_with_bit,
 )
 from .sydpower.modbus import pack_byte_pair, NOT_SET
 from .sydpower.const import (
@@ -74,9 +75,16 @@ REGISTER_SWITCH_DEFINITIONS = [
 # V1 decoder so the state comes straight from the last input frame.
 V1_STATE_SWITCH_DEFINITIONS = [
     {"name": "AC Output", "key": "acOutput"},
-    {"name": "DC & USB Output", "key": "dcPortOutput"},
+    {"name": "DC & USB Output", "key": "dcUsbOutput"},
     {"name": "AC Silent Charging", "key": "acSilentCharging", "category": EntityCategory.CONFIG},
     {"name": "Buzzer", "key": "buzzerEnabled", "category": EntityCategory.CONFIG},
+    {"name": "AC Custom Charge", "key": "acCustomCharge", "category": EntityCategory.CONFIG},
+]
+# Per-window enables of the custom charge schedule, bits of input 83
+V1_SCHEDULE_SWITCH_DEFINITIONS = [
+    {"name": "Charge Schedule 1", "key": "chargeSchedule1Enabled", "category": EntityCategory.CONFIG},
+    {"name": "Charge Schedule 2", "key": "chargeSchedule2Enabled", "category": EntityCategory.CONFIG},
+    {"name": "Charge Schedule 3", "key": "chargeSchedule3Enabled", "category": EntityCategory.CONFIG},
 ]
 
 
@@ -95,6 +103,11 @@ async def async_setup_entry(
             entities.extend(
                 FossibotV1StateSwitch(coordinator, device_id, **defn)
                 for defn in V1_STATE_SWITCH_DEFINITIONS
+            )
+            entities.extend(
+                FossibotV1StateSwitch(coordinator, device_id, register=IREG_V1_CHARGE_SCHEDULE_FLAGS,
+                                      state_key="chargeScheduleFlagsRaw", bits=SCHEDULE_SWITCH_BITS, **defn)
+                for defn in V1_SCHEDULE_SWITCH_DEFINITIONS
             )
             continue
         entities.extend(
@@ -122,7 +135,7 @@ class _FossibotSwitchBase(FossibotEntity, SwitchEntity):
     ) -> None:
         super().__init__(coordinator, device_id)
         self._key = key
-        self._attr_name = f"Fossibot {device_id} {name}"
+        self._attr_name = name
         self._attr_unique_id = f"{device_id}_{key}"
         self._attr_entity_category = category
 
@@ -212,18 +225,23 @@ class FossibotV1StateSwitch(_FossibotSwitchBase):
     """
 
     def __init__(self, coordinator, device_id: str, name: str, key: str,
-                 category: EntityCategory | None = None) -> None:
+                 category: EntityCategory | None = None,
+                 register: int = IREG_V1_SYSTEM_STATE, state_key: str = "systemStateRaw",
+                 bits: dict | None = None) -> None:
         super().__init__(coordinator, device_id, name, key, category)
-        self._bit = STATE_SWITCH_BITS[key]
+        self._register = register
+        self._state_key = state_key
+        self._bit = (bits or STATE_SWITCH_BITS)[key]
 
     async def _write(self, on: bool) -> None:
-        current = self.coordinator.data.get(self._device_id, {}).get("systemStateRaw")
+        current = self.coordinator.data.get(self._device_id, {}).get(self._state_key)
         if current is None:
-            _LOGGER.error("No state word known for %s yet, not writing", self._device_id)
+            _LOGGER.error("No value of register %d known for %s yet, not writing",
+                          self._register, self._device_id)
             return
         word = state_word_with_bit(current, self._bit, on)
         await self.coordinator.connector.run_command(
-            self._device_id, "write_v1", (FUNC_WRITE_STATE, IREG_V1_SYSTEM_STATE, word)
+            self._device_id, "write_v1", (FUNC_WRITE_STATE, self._register, word)
         )
         await self.coordinator.async_request_refresh()
 

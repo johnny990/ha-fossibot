@@ -33,8 +33,9 @@ from .const import (
 )
 from .registers import decode_holding_registers, decode_input_registers
 from .registers_v1 import (
-    PROTOCOL_V1, WRITABLE_REGISTERS_V1, decode_holding_registers_v1,
-    decode_input_registers_v1, detect_protocol,
+    PROTOCOL_V1, WINDOW_BASE_REGISTERS_V1, WRITABLE_REGISTERS_V1,
+    decode_holding_registers_v1, decode_input_registers_v1, detect_protocol,
+    validate_charge_window_words,
 )
 
 
@@ -241,24 +242,40 @@ def get_write_modbus(address: int, feature: int, value: int) -> List[int]:
     return aa(address, feature, [a['high'], a['low']], False)
 
 
-def get_write_modbus_v1(address: int, func: int, register: int, value: int) -> List[int]:
+def get_write_modbus_v1(address: int, func: int, register: int, value) -> List[int]:
     """Encode a validated V1 write (func 6 holding register, func 5 state word).
 
     Frame as the BrightEMS app builds it for protocol_version >= 1:
-    ``[addr, func, reg, count_hi, count_lo, value_hi, value_lo]`` + CRC.
+    ``[addr, func, reg, count_hi, count_lo, value_hi, value_lo, ...]`` + CRC.
+    ``value`` may be a list of consecutive words (the app writes a charge
+    window as three words in one frame); only window base registers accept
+    more than one word, see WRITABLE_REGISTERS_V1.
     """
     allowed = WRITABLE_REGISTERS_V1.get((func, register))
     if allowed is None:
         raise ModbusValidationError(
             "V1 func %d register %d is not writable by this integration" % (func, register)
         )
-    if value not in allowed:
+    words = list(value) if isinstance(value, (list, tuple)) else [value]
+    if len(words) > 1 and register not in WINDOW_BASE_REGISTERS_V1:
+        raise ModbusValidationError(
+            "V1 register %d takes a single word, got %d" % (register, len(words))
+        )
+    if len(words) == 3 and register in WINDOW_BASE_REGISTERS_V1:
+        validate_charge_window_words(words)
+    elif len(words) != 1:
+        raise ModbusValidationError("V1 window writes are exactly 3 words")
+    elif words[0] not in allowed:
         raise ModbusValidationError(
             "Value %d is not allowed for V1 func %d register %d (%d..%d)"
-            % (value, func, register, allowed.start, allowed.stop - 1)
+            % (words[0], func, register, allowed.start, allowed.stop - 1)
         )
-    v = int_to_high_low(value)
-    return sa(address, func, [register & 0xFF, 0x00, 0x01, v['high'], v['low']], False)
+    count = int_to_high_low(len(words))
+    data: List[int] = [register & 0xFF, count['high'], count['low']]
+    for w in words:
+        v = int_to_high_low(w)
+        data += [v['high'], v['low']]
+    return sa(address, func, data, False)
 
 
 def pack_byte_pair(high: int, low: int) -> int:

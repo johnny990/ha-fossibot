@@ -333,9 +333,12 @@ PV energy counters. Writes use the V1 frame the app sends
 (`[addr, func, reg, 0, 1, hi, lo, crc]`): outputs and modes are bits of the
 state word (input register 75, function 5, read-modify-write of the whole
 word), settings are holding registers (function 6). V1 devices get switches
-for AC Output, DC & USB Output, AC Silent Charging and Buzzer, and numbers
-for the charge/discharge limits, DC input current and the standby timers.
-The LED, charge-level and DC-input-type selects are not mapped yet.
+for AC Output, DC & USB Output, AC Silent Charging, Buzzer, AC Custom Charge
+and the three charge-schedule windows, a DC Input Type select, numbers for the
+charge/discharge limits, DC input current and the standby timers, and the
+`fossibot.set_charge_schedule` action to write a custom charge window (time,
+amount or target SoC, repeat days). The AC charge level and the grid-tie
+output block are read only.
 
 ## Not supported
 

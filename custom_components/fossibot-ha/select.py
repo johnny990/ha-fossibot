@@ -12,6 +12,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .coordinator import FossibotDataUpdateCoordinator
 from .entity import FossibotEntity, device_profile
+from .sydpower.registers_v1 import (
+    FUNC_WRITE_STATE, IREG_V1_SYSTEM_STATE, state_word_with_bit,
+)
 from .sydpower.const import (
     HREG_AC_CHARGE_LEVEL,
     HREG_DC_INPUT_TYPE,
@@ -109,6 +112,14 @@ SELECT_DEFINITIONS = [
     },
 ]
 
+# Protocol V1: two-state settings that are single bits of the state word
+# (input 75); the app's "DC input type setting" is bit 5, PV mode = 0.
+V1_BIT_SELECT_DEFINITIONS = [
+    {"name": "DC Input Type", "key": "dcInputTypeRaw", "bit": 5,
+     "options": OrderedDict([("PV mode", 0), ("DC mode", 1)]),
+     "category": EntityCategory.CONFIG},
+]
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -118,12 +129,14 @@ async def async_setup_entry(
     """Set up Fossibot select entities."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]
 
-    entities = [
-        FossibotRegisterSelect(coordinator, device_id, **defn)
-        for device_id in coordinator.data
-        if device_profile(coordinator, device_id) == 0  # V0 holding registers only
-        for defn in SELECT_DEFINITIONS
-    ]
+    entities = []
+    for device_id in coordinator.data:
+        if device_profile(coordinator, device_id) == 0:
+            entities.extend(FossibotRegisterSelect(coordinator, device_id, **defn)
+                            for defn in SELECT_DEFINITIONS)
+        else:
+            entities.extend(FossibotV1BitSelect(coordinator, device_id, **defn)
+                            for defn in V1_BIT_SELECT_DEFINITIONS)
 
     async_add_entities(entities)
 
@@ -148,7 +161,7 @@ class FossibotRegisterSelect(FossibotEntity, SelectEntity):
         self._register = register
         self._options_map = options                        # label → register value
         self._reverse_map = {v: k for k, v in options.items()}  # register value → label
-        self._attr_name = f"Fossibot {device_id} {name}"
+        self._attr_name = name
         self._attr_unique_id = f"{device_id}_{unique_id_suffix or key}"
         self._attr_options = list(options.keys())
         self._attr_entity_category = category
@@ -172,5 +185,30 @@ class FossibotRegisterSelect(FossibotEntity, SelectEntity):
         reg_value = self._options_map[option]
         await self.coordinator.connector.run_command(
             self._device_id, "write_register", (self._register, reg_value)
+        )
+        await self.coordinator.async_request_refresh()
+
+
+class FossibotV1BitSelect(FossibotRegisterSelect):
+    """Protocol V1 select backed by one bit of the state word (input 75)."""
+
+    def __init__(self, coordinator, device_id: str, name: str, key: str, bit: int,
+                 options: OrderedDict, category: EntityCategory | None = None) -> None:
+        super().__init__(coordinator, device_id, name, key, IREG_V1_SYSTEM_STATE,
+                         options, category=category)
+        self._bit = bit
+
+    async def async_select_option(self, option: str) -> None:
+        """Flip the bit in the last reported state word and write it back."""
+        if option not in self._options_map:
+            _LOGGER.error("Invalid option for %s: %s", self._key, option)
+            return
+        current = self.coordinator.data.get(self._device_id, {}).get("systemStateRaw")
+        if current is None:
+            _LOGGER.error("No state word known for %s yet, not writing", self._device_id)
+            return
+        word = state_word_with_bit(current, self._bit, bool(self._options_map[option]))
+        await self.coordinator.connector.run_command(
+            self._device_id, "write_v1", (FUNC_WRITE_STATE, IREG_V1_SYSTEM_STATE, word)
         )
         await self.coordinator.async_request_refresh()

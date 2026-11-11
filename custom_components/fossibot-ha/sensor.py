@@ -69,6 +69,12 @@ SENSOR_DEFINITIONS = [
      "state_class": SensorStateClass.TOTAL_INCREASING, "profile": 1},  # V1 input 61
     {"name": "Device Clock", "key": "deviceTime", "unit": None, "device_class": None,
      "category": DIAGNOSTIC, "default_enabled": False, "profile": 1},  # V1 input 97-99
+    {"name": "Charge Schedule 1", "key": "chargeSchedule1", "unit": None, "device_class": None,
+     "category": DIAGNOSTIC, "profile": 1},  # V1 holding 38-40
+    {"name": "Charge Schedule 2", "key": "chargeSchedule2", "unit": None, "device_class": None,
+     "category": DIAGNOSTIC, "profile": 1},  # V1 holding 41-43
+    {"name": "Charge Schedule 3", "key": "chargeSchedule3", "unit": None, "device_class": None,
+     "category": DIAGNOSTIC, "profile": 1},  # V1 holding 44-46
 
     # --- Output power ----------------------------------------------------
     {"name": "Total Output", "key": "totalOutput", "unit": "W", "device_class": POWER},  # input 39
@@ -207,7 +213,7 @@ class FossibotSensor(FossibotEntity, SensorEntity):
         super().__init__(coordinator, device_id)
         self._key = key
         self._attribute_keys = attribute_keys
-        self._attr_name = f"Fossibot {device_id} {name}"
+        self._attr_name = name
         self._attr_native_unit_of_measurement = unit
         self._attr_device_class = device_class
         self._attr_unique_id = f"{device_id}_{key}"

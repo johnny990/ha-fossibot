@@ -34,9 +34,6 @@ BINARY_SENSOR_DEFINITIONS = [
      "device_class": BinarySensorDeviceClass.PLUG},  # bit 19
     {"name": "On Grid", "key": "gridConnected", "profile": 0},  # bit 17
     {"name": "Grid Discharging", "key": "gridDischarging", "profile": 1},  # V1 input 53 bit 7
-    {"name": "PV Self-Consumption", "key": "pvSelfConsumption", "profile": 1},  # V1 input 75 bit 0
-    {"name": "Grid Feed Paused", "key": "gridFunctionPause", "profile": 1},  # V1 input 75 bit 1
-    {"name": "AI Energy Control", "key": "aiEnergyControl", "profile": 1},  # V1 input 75 bit 3
     {"name": "DC Charging", "key": "dcCharging",
      "device_class": BinarySensorDeviceClass.BATTERY_CHARGING},  # bit 22
     {"name": "DC Input Present", "key": "dcChargeVoltagePresent",
@@ -160,7 +157,7 @@ class FossibotBinarySensor(FossibotEntity, BinarySensorEntity):
         super().__init__(coordinator, device_id)
         self._key = key
         self._attribute_keys = attribute_keys
-        self._attr_name = f"Fossibot {device_id} {name}"
+        self._attr_name = name
         self._attr_unique_id = f"{device_id}_{key}"
         self._attr_device_class = device_class
         self._attr_entity_category = category
