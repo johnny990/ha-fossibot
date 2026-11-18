@@ -1,7 +1,7 @@
 # Fossibot Home Assistant Integration
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![GitHub Release](https://img.shields.io/github/v/release/iamslan/ha-fossibot)](https://github.com/iamslan/ha-fossibot/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/johnny990/ha-fossibot)](https://github.com/johnny990/ha-fossibot/releases)
 [![License: MIT](https://img.shields.io/github/license/iamslan/ha-fossibot)](LICENSE)
 
 Monitor and control **Fossibot / Sydpower** portable power stations from
