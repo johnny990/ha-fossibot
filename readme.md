@@ -155,6 +155,8 @@ Rows marked **†** are the disabled-by-default ones.
 | Battery Usable Capacity | Ah | As reported by the BMS |
 | Average Charge SoC / Average Discharge SoC | % | Diagnostic |
 | Battery Chemistry † | — | Capacity and cell topology in the attributes |
+| Battery Power | W | V1 only. Net pack power, positive while charging, negative while discharging |
+| Battery Charge Power †, Battery Discharge Power † | W | V1 only. The two non-negative halves of Battery Power |
 
 **Power in**
 
@@ -189,6 +191,7 @@ Rows marked **†** are the disabled-by-default ones.
 | Entity | Unit | Notes |
 |--------|------|-------|
 | PV Energy Total | kWh | Lifetime total — ready for the Energy dashboard |
+| Battery Charge Energy / Battery Discharge Energy | kWh | V1 only. Integrated by the integration from Battery Power and kept across restarts: the "energy into / out of the battery" pair the Energy dashboard asks for |
 | Remaining Charge Time | min | BMS estimate to full |
 | Remaining Discharge Time | min | BMS estimate to empty |
 | Charge Schedule Remaining † | min | Time left on a scheduled charge |
@@ -203,6 +206,7 @@ Rows marked **†** are the disabled-by-default ones.
 | DC Input Max Current † | A | The ceiling the current-limit slider obeys |
 | DC Input Min / Max Voltage † | V | Accepted DC input window |
 | Protocol Version † | — | Should be `0` or `1` on a power station |
+| Charge Priority, UPS Mode | — | V1 only, raw holding 88 / 85; meaning not documented by Sydpower |
 
 ### Binary sensors
 
@@ -328,8 +332,9 @@ connected" and the sensor stays empty rather than showing 0%.
 Newer stations report protocol version 1 in holding register 7 and use a
 different register layout (`sydpower/registers_v1.py`, indices taken from the
 BrightEMS app bundle). The integration detects this from the first settings
-frame and decodes with the V1 table: inputs, SoC, state bits, timers and the
-PV energy counters. Writes use the V1 frame the app sends
+frame and decodes with the V1 table: inputs, SoC, state bits, timers, the
+PV energy counters and the signed battery power, from which it also integrates
+the charge and discharge energy counters the device itself does not keep. Writes use the V1 frame the app sends
 (`[addr, func, reg, 0, 1, hi, lo, crc]`): outputs and modes are bits of the
 state word (input register 75, function 5, read-modify-write of the whole
 word), settings are holding registers (function 6). V1 devices get switches
@@ -371,6 +376,7 @@ custom_components/fossibot-ha/
   sydpower/
     const.py           # Register addresses, protocol enumerations
     registers.py       # V0 register map: decoders, bitfields, fault tables
+    registers_v1.py    # V1 register map (F7200): decoders, state-word bits, charge windows
     modbus.py          # Framing, CRC-16, write allowlist
     connector.py       # Connection orchestration
     mqtt_client.py     # MQTT over TCP (paho-mqtt)

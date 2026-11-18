@@ -106,6 +106,9 @@ def test_input_decode_idle_frame():
     assert out["buzzerEnabled"] is True
     assert out["deviceTime"] == "2026-11-10 17:46:57"
     assert "soc_s1" not in out
+    # input 90 = 0x032E = 814 W out of the pack while the inverter carried 816 W; exposed as + charge / - discharge
+    assert out["batteryPower"] == -814
+    assert out["batteryDischargePower"] == 814 and out["batteryChargePower"] == 0
 
 
 def test_input_decode_loaded_frame():
@@ -114,6 +117,19 @@ def test_input_decode_loaded_frame():
     assert out["acOutputPower"] == 173
     assert out["remainingDischargeTime"] == 899
     assert out["deviceTime"] == "2026-11-10 18:09:21"
+    assert out["batteryPower"] == -173 and out["batteryDischargePower"] == 173
+
+
+def test_battery_power_sign_while_charging():
+    # observed word 64932 while the grid charged at 604 W (two-complement -604 from the device)
+    regs = list(INPUT_IDLE)
+    regs[90] = 64932
+    out = decode_input_registers_v1(regs)
+    assert out["batteryPower"] == 604
+    assert out["batteryChargePower"] == 604 and out["batteryDischargePower"] == 0
+    regs[90] = 0
+    out = decode_input_registers_v1(regs)
+    assert out["batteryPower"] == 0 and out["batteryChargePower"] == 0 and out["batteryDischargePower"] == 0
 
 
 def test_parse_registers_routes_by_profile():

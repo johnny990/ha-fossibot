@@ -1,13 +1,16 @@
 """Support for Fossibot sensors."""
 
+import time
+
 from homeassistant.components.sensor import (
+    RestoreSensor,
     SensorDeviceClass,
     SensorEntity,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -65,6 +68,13 @@ SENSOR_DEFINITIONS = [
      "default_enabled": False},  # V1 input 06
     {"name": "AC Grid Power", "key": "acGridPower", "unit": "W", "device_class": POWER, "profile": 1},  # V1 input 07
     {"name": "DC Output Power", "key": "dcOutputPower", "unit": "W", "device_class": POWER, "profile": 1},  # V1 input 78
+    # V1 input 90, signed: positive while charging, negative while discharging; the two halves below are
+    # what the Battery Charge / Discharge Energy counters integrate
+    {"name": "Battery Power", "key": "batteryPower", "unit": "W", "device_class": POWER, "profile": 1},
+    {"name": "Battery Charge Power", "key": "batteryChargePower", "unit": "W", "device_class": POWER,
+     "profile": 1, "default_enabled": False},
+    {"name": "Battery Discharge Power", "key": "batteryDischargePower", "unit": "W", "device_class": POWER,
+     "profile": 1, "default_enabled": False},
     {"name": "PV Energy Today", "key": "pvEnergyToday", "unit": "Wh", "device_class": ENERGY,
      "state_class": SensorStateClass.TOTAL_INCREASING, "profile": 1},  # V1 input 61
     {"name": "Device Clock", "key": "deviceTime", "unit": None, "device_class": None,
@@ -75,6 +85,14 @@ SENSOR_DEFINITIONS = [
      "category": DIAGNOSTIC, "profile": 1},  # V1 holding 41-43
     {"name": "Charge Schedule 3", "key": "chargeSchedule3", "unit": None, "device_class": None,
      "category": DIAGNOSTIC, "profile": 1},  # V1 holding 44-46
+    {"name": "Charge Priority", "key": "chargePriority", "unit": None, "device_class": None,
+     "category": DIAGNOSTIC, "profile": 1},  # V1 holding 88, raw value (meaning undocumented)
+    {"name": "UPS Mode", "key": "upsMode", "unit": None, "device_class": None,
+     "category": DIAGNOSTIC, "profile": 1},  # V1 holding 85, raw value
+    # state = input 13 (the word after the inverter output power), attributes = the other unmapped words
+    {"name": "Unmapped Inputs (raw)", "key": "ireg13", "unit": None, "device_class": None,
+     "category": DIAGNOSTIC, "profile": 1, "default_enabled": False, "attribute_keys": (
+         "ireg1", "ireg36", "ireg37", "ireg38", "ireg39", "ireg66", "ireg67", "ireg85")},
 
     # --- Output power ----------------------------------------------------
     {"name": "Total Output", "key": "totalOutput", "unit": "W", "device_class": POWER},  # input 39
@@ -174,6 +192,26 @@ SENSOR_DEFINITIONS = [
      "default_enabled": False},  # input 15
 ]
 
+# Energy counters the device does not provide: integrated here from the split battery power on every
+# coordinator refresh and restored across restarts, so the Energy dashboard gets its "energy into / out of
+# the battery" pair without template or Riemann helpers.
+ENERGY_SENSOR_DEFINITIONS = [
+    {"name": "Battery Charge Energy", "key": "batteryChargeEnergy", "power_key": "batteryChargePower",
+     "profile": 1},
+    {"name": "Battery Discharge Energy", "key": "batteryDischargeEnergy", "power_key": "batteryDischargePower",
+     "profile": 1},
+]
+
+# A longer gap between two samples (reconnect, restart) is energy of unknown size and is dropped, not guessed.
+MAX_INTEGRATION_GAP = 600  # seconds
+
+
+def add_energy(total_kwh: float, power_w: float, seconds: float) -> float:
+    """Left-Riemann step: credit ``power_w`` held for ``seconds`` to ``total_kwh``."""
+    if seconds <= 0 or seconds > MAX_INTEGRATION_GAP or power_w <= 0:
+        return total_kwh
+    return total_kwh + power_w * seconds / 3_600_000
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -189,6 +227,12 @@ async def async_setup_entry(
         for defn in definitions_for(
             SENSOR_DEFINITIONS, device_profile(coordinator, device_id))
     ]
+    entities.extend(
+        FossibotEnergySensor(coordinator, device_id, **defn)
+        for device_id in coordinator.data
+        for defn in definitions_for(
+            ENERGY_SENSOR_DEFINITIONS, device_profile(coordinator, device_id))
+    )
 
     async_add_entities(entities)
 
@@ -251,3 +295,64 @@ class FossibotSensor(FossibotEntity, SensorEntity):
             if key in device_data
         }
         return attributes or None
+
+
+class FossibotEnergySensor(FossibotEntity, RestoreSensor):
+    """kWh counter integrated from one of the device's power readings.
+
+    Each coordinator refresh credits the previously seen power for the time
+    that has passed since it was seen (left Riemann sum). The running total is
+    restored on restart; the interval spanning the restart itself is skipped.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = "kWh"
+    _attr_suggested_display_precision = 3
+
+    def __init__(
+        self,
+        coordinator: FossibotDataUpdateCoordinator,
+        device_id: str,
+        name: str,
+        key: str,
+        power_key: str,
+    ) -> None:
+        """Initialize the counter."""
+        super().__init__(coordinator, device_id)
+        self._power_key = power_key
+        self._attr_name = name
+        self._attr_unique_id = f"{device_id}_{key}"
+        self._total_kwh = 0.0
+        self._last_power: float | None = None
+        self._last_sample: float | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the running total, then take the first sample."""
+        await super().async_added_to_hass()
+        last = await self.async_get_last_sensor_data()
+        if last is not None and last.native_value is not None:
+            try:
+                self._total_kwh = float(last.native_value)
+            except (TypeError, ValueError):
+                pass
+        self._sample()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Integrate one more interval, then publish the state."""
+        self._sample()
+        super()._handle_coordinator_update()
+
+    def _sample(self) -> None:
+        power = self.coordinator.data.get(self._device_id, {}).get(self._power_key)
+        now = time.monotonic()
+        if self._last_power is not None and self._last_sample is not None:
+            self._total_kwh = add_energy(self._total_kwh, self._last_power, now - self._last_sample)
+        self._last_power = power
+        self._last_sample = now if power is not None else None
+
+    @property
+    def native_value(self):
+        """Return the running total in kWh."""
+        return round(self._total_kwh, 4)

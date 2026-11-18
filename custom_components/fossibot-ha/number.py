@@ -12,7 +12,7 @@ from .const import DOMAIN
 from .coordinator import FossibotDataUpdateCoordinator
 from .entity import FossibotEntity, device_profile
 from .sydpower.registers_v1 import (
-    FUNC_WRITE_HOLDING, HREG_V1_AC_SLEEP_TIME, HREG_V1_CHARGE_SOC_MAX,
+    FUNC_WRITE_HOLDING, HREG_V1_AC_SLEEP_TIME, HREG_V1_CHARGE_PRIORITY, HREG_V1_CHARGE_SOC_MAX,
     HREG_V1_DC_INPUT_CURRENT_SET, HREG_V1_DC_SLEEP_TIME, HREG_V1_DISCHARGE_SOC_MIN,
     HREG_V1_LCD_DIM_TIME, HREG_V1_SHUTDOWN_WAIT_TIME, HREG_V1_USB_SLEEP_TIME,
 )
@@ -135,6 +135,10 @@ V1_NUMBER_DEFINITIONS = [
     {"name": "AC Charging Upper Limit", "key": "acChargingUpperLimit",
      "register": HREG_V1_CHARGE_SOC_MAX, "min_value": 60, "max_value": 100, "step": 1,
      "unit": "%", "mode": NumberMode.SLIDER, "multiplier": 10, "category": EntityCategory.CONFIG},
+    # holding 88 "charge_priority": raw value, meaning undocumented (experiments only; 0 = factory value seen)
+    {"name": "Charge Priority (raw)", "key": "chargePriority",
+     "register": HREG_V1_CHARGE_PRIORITY, "min_value": 0, "max_value": 3, "step": 1,
+     "unit": None, "mode": NumberMode.BOX, "multiplier": 1, "category": EntityCategory.CONFIG},
     {"name": "Screen Rest Time", "key": "screenRestTime",
      "register": HREG_V1_LCD_DIM_TIME, "min_value": 0, "max_value": 5000, "step": 1,
      "unit": "s", "mode": NumberMode.BOX, "multiplier": 1, "category": EntityCategory.CONFIG},

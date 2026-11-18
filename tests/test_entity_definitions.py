@@ -38,7 +38,12 @@ from fossibot_ha.binary_sensor import (
 )
 from fossibot_ha.number import NUMBER_DEFINITIONS, FossibotNumber
 from fossibot_ha.select import SELECT_DEFINITIONS, FossibotRegisterSelect
-from fossibot_ha.sensor import SENSOR_DEFINITIONS, FossibotSensor
+from fossibot_ha.sensor import (
+    ENERGY_SENSOR_DEFINITIONS,
+    SENSOR_DEFINITIONS,
+    FossibotEnergySensor,
+    FossibotSensor,
+)
 from fossibot_ha.switch import (
     REGISTER_SWITCH_DEFINITIONS,
     SWITCH_DEFINITIONS,
@@ -47,6 +52,8 @@ from fossibot_ha.switch import (
 )
 
 SENSOR_KEYS = [d["key"] for d in SENSOR_DEFINITIONS]
+# integrated counters: keys of their own, fed by a decoded power key
+ENERGY_SENSOR_KEYS = [d["key"] for d in ENERGY_SENSOR_DEFINITIONS]
 BINARY_SENSOR_KEYS = [d["key"] for d in BINARY_SENSOR_DEFINITIONS]
 SWITCH_KEYS = [d["key"] for d in SWITCH_DEFINITIONS]
 REGISTER_SWITCH_KEYS = [d["key"] for d in REGISTER_SWITCH_DEFINITIONS]
@@ -57,6 +64,8 @@ NUMBER_KEYS = [d["key"] for d in NUMBER_DEFINITIONS]
 # every definition table is paired with the class it feeds.
 DEFINITION_TABLES = [
     ("sensor", "SENSOR_DEFINITIONS", SENSOR_DEFINITIONS, FossibotSensor),
+    ("sensor", "ENERGY_SENSOR_DEFINITIONS", ENERGY_SENSOR_DEFINITIONS,
+     FossibotEnergySensor),
     ("binary_sensor", "BINARY_SENSOR_DEFINITIONS", BINARY_SENSOR_DEFINITIONS,
      FossibotBinarySensor),
     ("switch", "SWITCH_DEFINITIONS", SWITCH_DEFINITIONS, FossibotSwitch),
@@ -228,6 +237,7 @@ class TestEntityCoverage:
         """unique_id suffixes must be distinct across every platform."""
         suffixes = (
             SENSOR_KEYS
+            + ENERGY_SENSOR_KEYS
             + BINARY_SENSOR_KEYS
             + SWITCH_KEYS
             + REGISTER_SWITCH_KEYS
@@ -455,3 +465,17 @@ class TestWritableRegisterEntityMapping:
     def test_led_register_has_select_not_switch(self):
         assert "ledOutput" not in SWITCH_KEYS
         assert REGISTER_LED in {d["register"] for d in SELECT_DEFINITIONS}
+
+
+# ---------------------------------------------------------------------------
+# Integrated energy counters
+# ---------------------------------------------------------------------------
+
+class TestEnergySensorDefinitions:
+    def test_power_keys_are_decoded_sensor_keys(self):
+        """Each counter integrates a power reading that the decoder emits."""
+        for defn in ENERGY_SENSOR_DEFINITIONS:
+            assert defn["power_key"] in SENSOR_KEYS, defn
+
+    def test_counter_keys_do_not_shadow_decoded_keys(self):
+        assert set(ENERGY_SENSOR_KEYS).isdisjoint(SENSOR_KEYS)

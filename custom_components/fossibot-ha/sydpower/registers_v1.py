@@ -46,11 +46,19 @@ IREG_V1_TIME_YEAR_MONTH = 97
 IREG_V1_TIME_DAY_HOUR = 98
 IREG_V1_TIME_MIN_SEC = 99
 IREG_V1_CHARGE_SCHEDULE_FLAGS = 83   # grid_charge_custom_enable_flag: bits 0-2 = windows 1-3
+IREG_V1_BATTERY_POWER = 90           # signed W; the device reports + discharge / - charge, exposed as + charge / - discharge
 
 # Custom charge windows (holding): time word, amount/target word, repeat word
 HREG_V1_CHARGE_WINDOW_TIME = (38, 41, 44)
 HREG_V1_CHARGE_WINDOW_AMOUNT = (39, 42, 45)
 HREG_V1_CHARGE_WINDOW_REPEAT = (40, 43, 46)
+
+# Input words with no known meaning yet (F7200 frames: 1 = 2, 13 = 0, 36-39 = 0x3000/0x4000 pairs,
+# 66 = 1018, 67 = 4, 85 = 0); exposed raw so a live comparison (load on/off, grid on/off) can name them.
+# None of them moved under a 2 kW pass-through load: the frame carries no pass-through power.
+UNMAPPED_INPUTS_V1 = (1, 13, 36, 37, 38, 39, 66, 67, 85)
+IREG_V1_AC_INPUT_VOLTAGE = 8     # x10 V (grid present only)
+IREG_V1_AC_INPUT_FREQUENCY = 9   # x100 Hz
 
 # Observed on an F7200, not in the app table: 230.4 V / 50.0 Hz while the
 # inverter runs, the voltage decaying to 0 after it is switched off.
@@ -223,6 +231,9 @@ def decode_input_registers_v1(registers: List[int]) -> Dict[str, Any]:
 
     _set(out, "acOutputVoltage", _map(reg(IREG_V1_AC_OUTPUT_VOLTAGE), lambda v: round(v / 10, 1)))
     _set(out, "acOutputFrequency", _map(reg(IREG_V1_AC_OUTPUT_FREQUENCY), lambda v: round(v / 10, 1)))
+    # grid side: 2284/5000 idle, 2256/4989 under a 2 kW pass-through load (F7200, grid present)
+    _set(out, "acInputVoltage", _map(reg(IREG_V1_AC_INPUT_VOLTAGE), lambda v: round(v / 10, 1)))
+    _set(out, "acInputFrequency", _map(reg(IREG_V1_AC_INPUT_FREQUENCY), lambda v: round(v / 100, 2)))
 
     _set(out, "soc", _map(reg(IREG_V1_MAIN_BAT), decode_v1_soc))
     for n in range(4):
@@ -251,6 +262,19 @@ def decode_input_registers_v1(registers: List[int]) -> Dict[str, Any]:
         out["chargeScheduleFlagsRaw"] = flags
         for n in range(3):
             out["chargeSchedule%dEnabled" % (n + 1)] = bool(flags & (1 << n))
+
+    # raw words not yet in the map (candidates for pass-through / apparent power); diagnostic only
+    for index in UNMAPPED_INPUTS_V1:
+        _set(out, "ireg%d" % index, reg(index))
+    # input 90 = battery net power, signed by the device as +W discharging (F7200: 1369 at 1363 W AC load off
+    # grid) / -W charging (64932 = -604 while the grid charged at 604 W). Exposed with the opposite sign
+    # (+ = charging) and split into two non-negative parts that feed the energy counters.
+    raw = reg(IREG_V1_BATTERY_POWER)
+    if raw is not None:
+        discharging = raw - 0x10000 if raw >= 0x8000 else raw
+        out["batteryPower"] = -discharging
+        out["batteryChargePower"] = max(0, -discharging)
+        out["batteryDischargePower"] = max(0, discharging)
 
     ym, dh, ms = (reg(IREG_V1_TIME_YEAR_MONTH), reg(IREG_V1_TIME_DAY_HOUR), reg(IREG_V1_TIME_MIN_SEC))
     if None not in (ym, dh, ms) and ym:
@@ -351,6 +375,8 @@ WRITABLE_REGISTERS_V1: Dict[tuple, range] = {
     (FUNC_WRITE_HOLDING, HREG_V1_SHUTDOWN_WAIT_TIME): range(0, 5001),
     (FUNC_WRITE_HOLDING, HREG_V1_USB_SLEEP_TIME): range(0, 5001),
     (FUNC_WRITE_HOLDING, HREG_V1_DC_SLEEP_TIME): range(0, 5001),
+    # charge_priority: meaning and value set undocumented (app table only names it); small range for experiments
+    (FUNC_WRITE_HOLDING, HREG_V1_CHARGE_PRIORITY): range(0, 4),
 }
 
 

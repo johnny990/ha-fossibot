@@ -60,6 +60,13 @@ BINARY_SENSOR_DEFINITIONS = [
      "device_class": BinarySensorDeviceClass.POWER,
      "default_enabled": False},  # bit 16
     {"name": "ECO Mode", "key": "ecoMode"},  # bit 12
+    # V1 grid charge mode bits of input 75 (app table names; which one the station honours is being verified)
+    {"name": "Grid Charge Auto", "key": "gridAutoEnabled", "profile": 1,
+     "category": EntityCategory.DIAGNOSTIC},  # bit 8
+    {"name": "Grid Charge Immediate", "key": "gridImmediateEnabled", "profile": 1,
+     "category": EntityCategory.DIAGNOSTIC},  # bit 9
+    {"name": "Grid Charge Custom", "key": "gridCustomEnabled", "profile": 1,
+     "category": EntityCategory.DIAGNOSTIC},  # bit 10
     # The LED button's on/off bit. The LED Mode select already reports the
     # richer four-state mode, so this stays off by default.
     {"name": "LED Output", "key": "ledOutput",
