@@ -76,7 +76,9 @@ HREG_V1_CHARGE_SOC_MAX = 27
 HREG_V1_SHUTDOWN_WAIT_TIME = 28
 HREG_V1_USB_SLEEP_TIME = 29
 HREG_V1_DC_SLEEP_TIME = 30
-HREG_V1_ECO_SOC = 31
+HREG_V1_ECO_SOC = 31                # low byte = minimum SoC %, high byte = recovery SoC %
+HREG_V1_SINGLE_CHARGE_TIME = 36     # one-time AC charge: high byte = end, low byte = start, 0xFF = none
+HREG_V1_SINGLE_CHARGE_AMOUNT = 37   # high byte = kWh x10, low byte = target SoC %
 HREG_V1_VERSION_AC = 47
 HREG_V1_VERSION_BMS = 48
 HREG_V1_VERSION_PV = 49
@@ -113,6 +115,7 @@ SYSTEM_STATE_BITS: Dict[int, str] = {
     8: "gridAutoEnabled",
     9: "gridImmediateEnabled",
     10: "gridCustomEnabled",
+    11: "acSingleCharge",           # charge_immediate_enable ("AC Single Charge", formerly "Charge now")
     12: "acCustomCharge",           # charge_custom_enable ("AC Custom Charge" toggle)
     13: "ecoMode",
     14: "appControlSleep",         # APP_control_remote_shutoff
@@ -195,6 +198,61 @@ def encode_charge_window(start_h: int, start_m: int, end_h: int, end_m: int,
         (kwh_x10 << 8) | soc,
         days_mask,
     ]
+
+
+def _clock_byte(hour: int, minute: int) -> int:
+    return (hour << 3) | (minute // 10)
+
+
+def decode_single_charge(time_word: Optional[int], amount_word: Optional[int]) -> Optional[str]:
+    """The one-time AC charge setting as the app shows it, e.g. "start 23:00, to 80 %".
+
+    Time word: high byte = end, low byte = start, each hour << 3 | minute/10,
+    0xFF = none (start now / no end time). Amount word as in a charge window.
+    With no amount and no end time the charge runs until the battery is full.
+    Layout confirmed by app 1.7.8 captures on an F7200 (see the tests).
+    """
+    if time_word is None or amount_word is None:
+        return None
+    end, start = time_word >> 8, time_word & 0xFF
+    kwh, soc = (amount_word >> 8) / 10, amount_word & 0xFF
+
+    def clock(byte: int) -> str:
+        return "%02d:%02d" % (byte >> 3, (byte & 0x7) * 10)
+
+    begin = "start now" if start == 0xFF else "start %s" % clock(start)
+    parts = [begin]
+    if end != 0xFF:
+        parts.append("until %s" % clock(end))
+    if kwh:
+        parts.append("%.1f kWh" % kwh)
+    elif soc:
+        parts.append("to %d %%" % soc)
+    if len(parts) == 1:
+        parts.append("until full")
+    return ", ".join(parts)
+
+
+def encode_single_charge(start: Optional[tuple], end: Optional[tuple],
+                         kwh: float, soc: int) -> List[int]:
+    """Pack the one-time AC charge setting into holding 36 and 37.
+
+    ``start`` / ``end`` are (hour, minute) or None (start now / no end time).
+    An end time may be combined with an energy amount or a target SoC (the
+    app sends both); amount and target are exclusive. No stop condition at all
+    means "stop when full".
+    """
+    for clock in (start, end):
+        if clock is not None and not (0 <= clock[0] <= 23 and 0 <= clock[1] <= 59 and clock[1] % 10 == 0):
+            raise ValueError("time must be within 00:00-23:50 with minutes in steps of 10")
+    kwh_x10 = int(round(kwh * 10))
+    if not (0 <= kwh_x10 <= 255 and 0 <= soc <= 100):
+        raise ValueError("energy 0-25.5 kWh, target SoC 0-100 %")
+    if kwh_x10 and soc:
+        raise ValueError("set either an energy amount or a target SoC, not both")
+    start_byte = 0xFF if start is None else _clock_byte(*start)
+    end_byte = 0xFF if end is None else _clock_byte(*end)
+    return [(end_byte << 8) | start_byte, (kwh_x10 << 8) | soc]
 
 
 def decode_input_registers_v1(registers: List[int]) -> Dict[str, Any]:
@@ -310,6 +368,8 @@ def decode_holding_registers_v1(registers: List[int]) -> Dict[str, Any]:
     # same 0.1 % units as the V0 limits (100 = 10 %, 900 = 90 %)
     _set(out, "dischargeLowerLimit", _map(reg(HREG_V1_DISCHARGE_SOC_MIN), lambda v: round(v / 10, 1)))
     _set(out, "acChargingUpperLimit", _map(reg(HREG_V1_CHARGE_SOC_MAX), lambda v: round(v / 10, 1)))
+    _set(out, "singleCharge", decode_single_charge(
+        reg(HREG_V1_SINGLE_CHARGE_TIME), reg(HREG_V1_SINGLE_CHARGE_AMOUNT)))
 
     for n in range(3):
         window = decode_charge_window(
@@ -347,8 +407,11 @@ STATE_SWITCH_BITS: Dict[str, int] = {
     "acOutput": 4,            # AC_BackUp_Output_KEY_onoff
     "acSilentCharging": 6,    # silent_charging_mode
     "buzzerEnabled": 7,       # Buzzer_enable
+    "acSingleCharge": 11,     # charge_immediate_enable
     "acCustomCharge": 12,     # charge_custom_enable; app toggle captured as bit 12
 }
+# the app clears "grid immediate" (bit 9) when it switches the one-time charge on
+SINGLE_CHARGE_CLEARS_BITS = (9,)
 
 # Per-window enables of the custom charge schedule (input 83, func 5)
 SCHEDULE_SWITCH_BITS: Dict[str, int] = {
@@ -375,8 +438,11 @@ WRITABLE_REGISTERS_V1: Dict[tuple, range] = {
     (FUNC_WRITE_HOLDING, HREG_V1_SHUTDOWN_WAIT_TIME): range(0, 5001),
     (FUNC_WRITE_HOLDING, HREG_V1_USB_SLEEP_TIME): range(0, 5001),
     (FUNC_WRITE_HOLDING, HREG_V1_DC_SLEEP_TIME): range(0, 5001),
-    # charge_priority: meaning and value set undocumented (app table only names it); small range for experiments
+    # charge_priority: balcony-inverter page in app 1.7.0 (0 grid + PV together, 1 PV first, 2 PV only); the app
+    # does not offer it for the F7200, so it stays an experiment
     (FUNC_WRITE_HOLDING, HREG_V1_CHARGE_PRIORITY): range(0, 4),
+    # one-time AC charge: [time, amount] in one func-6 frame, as the app writes it
+    (FUNC_WRITE_HOLDING, HREG_V1_SINGLE_CHARGE_TIME): range(0, 0x10000),
 }
 
 
@@ -385,6 +451,20 @@ def state_word_with_bit(current: int, bit: int, on: bool) -> int:
     return (current | (1 << bit)) if on else (current & ~(1 << bit) & 0xFFFF)
 
 WINDOW_BASE_REGISTERS_V1 = frozenset(HREG_V1_CHARGE_WINDOW_TIME)
+# registers written as several consecutive words in one frame -> word count
+MULTI_WORD_REGISTERS_V1: Dict[int, int] = {base: 3 for base in HREG_V1_CHARGE_WINDOW_TIME}
+MULTI_WORD_REGISTERS_V1[HREG_V1_SINGLE_CHARGE_TIME] = 2
+
+
+def validate_single_charge_words(words: List[int]) -> None:
+    """Refuse one-time charge words outside what encode_single_charge produces."""
+    from .modbus import ModbusValidationError  # local import, modbus imports this module
+    time_word, amount_word = words
+    for byte in (time_word >> 8, time_word & 0xFF):
+        if byte != 0xFF and not ((byte >> 3) <= 23 and (byte & 0x7) <= 5):
+            raise ModbusValidationError("one-time charge time byte %d is not a valid time" % byte)
+    if not 0 <= amount_word <= 0xFFFF or (amount_word & 0xFF) > 100:
+        raise ModbusValidationError("one-time charge amount word %d: target SoC must be 0-100" % amount_word)
 
 
 def validate_charge_window_words(words: List[int]) -> None:

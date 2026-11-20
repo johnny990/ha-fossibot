@@ -61,3 +61,49 @@ set_charge_schedule:
       description: Also switch the window on or off.
       selector:
         boolean:
+set_single_charge:
+  name: Set AC single charge
+  description: >-
+    Write the one-time AC charge of a protocol V1 station (F7200), the app's
+    "AC Single Charge". Stop conditions are optional: an end time, and either
+    an energy amount or a target SoC; with none the charge stops when the
+    battery is full.
+  fields:
+    device_id:
+      name: Device
+      required: true
+      selector:
+        device:
+          integration: fossibot
+    start_time:
+      name: Start time
+      description: Later today, minutes in steps of 10. Leave empty to start now.
+      selector:
+        time:
+    end_time:
+      name: End time
+      description: Minutes in steps of 10.
+      selector:
+        time:
+    energy_kwh:
+      name: Charge amount
+      description: kWh to charge.
+      selector:
+        number:
+          min: 0
+          max: 25.5
+          step: 0.1
+          unit_of_measurement: kWh
+    target_soc:
+      name: Charge to
+      description: Target SoC in %.
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+    enabled:
+      name: Enabled
+      description: Also switch AC Single Charge on or off.
+      selector:
+        boolean:

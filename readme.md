@@ -207,6 +207,7 @@ Rows marked **†** are the disabled-by-default ones.
 | DC Input Min / Max Voltage † | V | Accepted DC input window |
 | Protocol Version † | — | Should be `0` or `1` on a power station |
 | Charge Priority, UPS Mode | — | V1 only, raw holding 88 / 85; meaning not documented by Sydpower |
+| AC Single Charge Setting | — | V1 only, holding 36-37 as text, e.g. `start 23:00, to 80 %` |
 
 ### Binary sensors
 
@@ -338,12 +339,15 @@ the charge and discharge energy counters the device itself does not keep. Writes
 (`[addr, func, reg, 0, 1, hi, lo, crc]`): outputs and modes are bits of the
 state word (input register 75, function 5, read-modify-write of the whole
 word), settings are holding registers (function 6). V1 devices get switches
-for AC Output, DC & USB Output, AC Silent Charging, Buzzer, AC Custom Charge
-and the three charge-schedule windows, a DC Input Type select, numbers for the
-charge/discharge limits, DC input current and the standby timers, and the
-`fossibot.set_charge_schedule` action to write a custom charge window (time,
-amount or target SoC, repeat days). The AC charge level and the grid-tie
-output block are read only.
+for AC Output, DC & USB Output, AC Silent Charging, Buzzer, AC Custom Charge,
+AC Single Charge and the three charge-schedule windows, a DC Input Type select,
+numbers for the charge/discharge limits, DC input current and the standby
+timers, and two
+actions: `fossibot.set_charge_schedule` writes a custom charge window (time,
+amount or target SoC, repeat days) and `fossibot.set_single_charge` writes the
+one-time AC charge the app calls "AC Single Charge" (start now or at a time;
+stop at a time, after an energy amount, at a target SoC or when full). The AC
+charge level and the grid-tie output block are read only.
 
 ## Not supported
 

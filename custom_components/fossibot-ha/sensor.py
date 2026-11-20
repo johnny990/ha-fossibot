@@ -86,7 +86,9 @@ SENSOR_DEFINITIONS = [
     {"name": "Charge Schedule 3", "key": "chargeSchedule3", "unit": None, "device_class": None,
      "category": DIAGNOSTIC, "profile": 1},  # V1 holding 44-46
     {"name": "Charge Priority", "key": "chargePriority", "unit": None, "device_class": None,
-     "category": DIAGNOSTIC, "profile": 1},  # V1 holding 88, raw value (meaning undocumented)
+     "category": DIAGNOSTIC, "profile": 1},  # V1 holding 88, raw value (not offered by the app for the F7200)
+    {"name": "AC Single Charge Setting", "key": "singleCharge", "unit": None, "device_class": None,
+     "category": DIAGNOSTIC, "profile": 1},  # V1 holding 36-37
     {"name": "UPS Mode", "key": "upsMode", "unit": None, "device_class": None,
      "category": DIAGNOSTIC, "profile": 1},  # V1 holding 85, raw value
     # state = input 13 (the word after the inverter output power), attributes = the other unmapped words

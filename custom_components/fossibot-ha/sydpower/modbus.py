@@ -33,9 +33,10 @@ from .const import (
 )
 from .registers import decode_holding_registers, decode_input_registers
 from .registers_v1 import (
+    FUNC_WRITE_HOLDING, HREG_V1_SINGLE_CHARGE_TIME, MULTI_WORD_REGISTERS_V1,
     PROTOCOL_V1, WINDOW_BASE_REGISTERS_V1, WRITABLE_REGISTERS_V1,
     decode_holding_registers_v1, decode_input_registers_v1, detect_protocol,
-    validate_charge_window_words,
+    validate_charge_window_words, validate_single_charge_words,
 )
 
 
@@ -248,8 +249,8 @@ def get_write_modbus_v1(address: int, func: int, register: int, value) -> List[i
     Frame as the BrightEMS app builds it for protocol_version >= 1:
     ``[addr, func, reg, count_hi, count_lo, value_hi, value_lo, ...]`` + CRC.
     ``value`` may be a list of consecutive words (the app writes a charge
-    window as three words in one frame); only window base registers accept
-    more than one word, see WRITABLE_REGISTERS_V1.
+    window as three words and the one-time charge as two in one frame); only
+    the registers in MULTI_WORD_REGISTERS_V1 accept more than one word.
     """
     allowed = WRITABLE_REGISTERS_V1.get((func, register))
     if allowed is None:
@@ -257,14 +258,19 @@ def get_write_modbus_v1(address: int, func: int, register: int, value) -> List[i
             "V1 func %d register %d is not writable by this integration" % (func, register)
         )
     words = list(value) if isinstance(value, (list, tuple)) else [value]
-    if len(words) > 1 and register not in WINDOW_BASE_REGISTERS_V1:
+    if len(words) > 1 and register not in MULTI_WORD_REGISTERS_V1:
         raise ModbusValidationError(
             "V1 register %d takes a single word, got %d" % (register, len(words))
         )
     if len(words) == 3 and register in WINDOW_BASE_REGISTERS_V1:
         validate_charge_window_words(words)
+    elif register == HREG_V1_SINGLE_CHARGE_TIME and func == FUNC_WRITE_HOLDING:
+        if len(words) != 2:
+            raise ModbusValidationError("V1 one-time charge writes are exactly 2 words")
+        validate_single_charge_words(words)
     elif len(words) != 1:
-        raise ModbusValidationError("V1 window writes are exactly 3 words")
+        raise ModbusValidationError(
+            "V1 register %d takes %d words" % (register, MULTI_WORD_REGISTERS_V1[register]))
     elif words[0] not in allowed:
         raise ModbusValidationError(
             "Value %d is not allowed for V1 func %d register %d (%d..%d)"

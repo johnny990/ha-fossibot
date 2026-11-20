@@ -13,7 +13,7 @@ from .coordinator import FossibotDataUpdateCoordinator
 from .entity import FossibotEntity, device_profile
 from .sydpower.registers_v1 import (
     FUNC_WRITE_STATE, IREG_V1_CHARGE_SCHEDULE_FLAGS, IREG_V1_SYSTEM_STATE,
-    SCHEDULE_SWITCH_BITS, STATE_SWITCH_BITS, state_word_with_bit,
+    SCHEDULE_SWITCH_BITS, SINGLE_CHARGE_CLEARS_BITS, STATE_SWITCH_BITS, state_word_with_bit,
 )
 from .sydpower.modbus import pack_byte_pair, NOT_SET
 from .sydpower.const import (
@@ -79,6 +79,9 @@ V1_STATE_SWITCH_DEFINITIONS = [
     {"name": "AC Silent Charging", "key": "acSilentCharging", "category": EntityCategory.CONFIG},
     {"name": "Buzzer", "key": "buzzerEnabled", "category": EntityCategory.CONFIG},
     {"name": "AC Custom Charge", "key": "acCustomCharge", "category": EntityCategory.CONFIG},
+    # one-time AC charge, configured with the fossibot.set_single_charge action
+    {"name": "AC Single Charge", "key": "acSingleCharge", "category": EntityCategory.CONFIG,
+     "clear_on": SINGLE_CHARGE_CLEARS_BITS},
 ]
 # Per-window enables of the custom charge schedule, bits of input 83
 V1_SCHEDULE_SWITCH_DEFINITIONS = [
@@ -227,11 +230,12 @@ class FossibotV1StateSwitch(_FossibotSwitchBase):
     def __init__(self, coordinator, device_id: str, name: str, key: str,
                  category: EntityCategory | None = None,
                  register: int = IREG_V1_SYSTEM_STATE, state_key: str = "systemStateRaw",
-                 bits: dict | None = None) -> None:
+                 bits: dict | None = None, clear_on: tuple = ()) -> None:
         super().__init__(coordinator, device_id, name, key, category)
         self._register = register
         self._state_key = state_key
         self._bit = (bits or STATE_SWITCH_BITS)[key]
+        self._clear_on = clear_on  # bits the app clears in the same write when switching on
 
     async def _write(self, on: bool) -> None:
         current = self.coordinator.data.get(self._device_id, {}).get(self._state_key)
@@ -240,6 +244,9 @@ class FossibotV1StateSwitch(_FossibotSwitchBase):
                           self._register, self._device_id)
             return
         word = state_word_with_bit(current, self._bit, on)
+        if on:
+            for bit in self._clear_on:
+                word = state_word_with_bit(word, bit, False)
         await self.coordinator.connector.run_command(
             self._device_id, "write_v1", (FUNC_WRITE_STATE, self._register, word)
         )

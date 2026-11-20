@@ -269,3 +269,74 @@ def test_ac_output_bit_matches_app_capture():
     # app AC output off: 11 05 4b 0001 1808 5ce4 (bit 4 cleared from 0x1818)
     assert state_word_with_bit(0x1818, STATE_SWITCH_BITS["acOutput"], False) == 0x1808
     assert bytes(get_write_modbus_v1(0x11, FUNC_WRITE_STATE, IREG_V1_SYSTEM_STATE, 0x1808)).hex() == "11054b000118085ce4"
+
+
+# --- one-time AC charge ("AC Single Charge") --------------------------------
+
+from fossibot_ha.sydpower.registers_v1 import (
+    HREG_V1_SINGLE_CHARGE_TIME, SINGLE_CHARGE_CLEARS_BITS, decode_single_charge, encode_single_charge,
+)
+
+
+def test_single_charge_decode_of_captured_frame():
+    out = decode_holding_registers_v1(HOLDING)                   # holding 36-37 = 0xFFFF, 0
+    assert out["singleCharge"] == "start now, until full"
+    assert decode_input_registers_v1(INPUT_IDLE)["acSingleCharge"] is True   # 0x1898 has bit 11
+    assert decode_single_charge(None, 0) is None
+
+
+@pytest.mark.parametrize("start,end,kwh,soc,words,text", [
+    ((23, 0), None, 0, 80, [0xFFB8, 0x0050], "start 23:00, to 80 %"),
+    (None, (7, 30), 0, 0, [0x3BFF, 0x0000], "start now, until 07:30"),
+    (None, None, 1.5, 0, [0xFFFF, 0x0F00], "start now, 1.5 kWh"),
+    (None, None, 0, 0, [0xFFFF, 0x0000], "start now, until full"),
+    ((17, 20), (18, 20), 1.0, 0, [0x928A, 0x0A00], "start 17:20, until 18:20, 1.0 kWh"),
+])
+def test_single_charge_packing(start, end, kwh, soc, words, text):
+    assert encode_single_charge(start, end, kwh, soc) == words
+    assert decode_single_charge(*words) == text
+
+
+@pytest.mark.parametrize("args", [
+    ((23, 5), None, 0, 0),         # minutes not a multiple of 10
+    ((24, 0), None, 0, 0),         # hour out of range
+    (None, None, 1.5, 80),         # amount and target at once
+    (None, None, 0, 101),          # SoC above 100
+])
+def test_single_charge_encode_refusals(args):
+    with pytest.raises(ValueError):
+        encode_single_charge(*args)
+
+
+def test_single_charge_write_frame_and_refusals():
+    frame = get_write_modbus_v1(0x11, FUNC_WRITE_HOLDING, HREG_V1_SINGLE_CHARGE_TIME, [0xFFB8, 0x0050])
+    assert frame[:9] == [0x11, 0x06, 0x24, 0x00, 0x02, 0xFF, 0xB8, 0x00, 0x50]
+    for words in (0xFFB8, [0xFFB8, 0x0050, 0], [0xFFC0, 0], [0xFFB8, 101]):   # one word, three, hour 24, SoC 101
+        with pytest.raises(ModbusValidationError):
+            get_write_modbus_v1(0x11, FUNC_WRITE_HOLDING, HREG_V1_SINGLE_CHARGE_TIME, words)
+
+
+@pytest.mark.parametrize("start,end,kwh,soc,frame", [
+    # app 1.7.8 "AC Single Charge" on an F7200 (2026-11-20): now / until full, then start 17:20,
+    # then end 18:20 with 1.0 kWh, then end 18:20 with target 70 %
+    (None, None, 0, 0, "1106240002ffff00006c57"),
+    ((17, 20), None, 0, 0, "1106240002ff8a0000b646"),
+    ((17, 20), (18, 20), 1.0, 0, "1106240002928a0a00ba5c"),
+    ((17, 20), (18, 20), 0, 70, "1106240002928a0046e8db"),
+])
+def test_single_charge_write_matches_app_capture(start, end, kwh, soc, frame):
+    words = encode_single_charge(start, end, kwh, soc)
+    assert bytes(get_write_modbus_v1(0x11, FUNC_WRITE_HOLDING, HREG_V1_SINGLE_CHARGE_TIME, words)).hex() == frame
+
+
+def test_single_charge_off_matches_app_capture():
+    # app switched AC Single Charge off: state word 0x1818 -> 0x1018 (bit 11). App 1.7.8 sends two words
+    # (11 05 4b 0002 1018 1818); the one-word frame of 1.7.0 is what this integration writes.
+    assert state_word_with_bit(0x1818, STATE_SWITCH_BITS["acSingleCharge"], False) == 0x1018
+
+
+def test_single_charge_switch_clears_grid_immediate():
+    word = state_word_with_bit(0x1298, STATE_SWITCH_BITS["acSingleCharge"], True)   # bit 9 set, 11 clear
+    for bit in SINGLE_CHARGE_CLEARS_BITS:
+        word = state_word_with_bit(word, bit, False)
+    assert word == 0x1898
